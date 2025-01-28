@@ -25,10 +25,13 @@ class Program
     {
         private readonly Config _config;
         private readonly FileProcessor _processor;
+        private readonly string? _realExeDirectory;
 
         public FileProcessingService()
         {
-            _config = LoadConfig();
+            string? exePath = Process.GetCurrentProcess().MainModule?.FileName;
+            _realExeDirectory = Path.GetDirectoryName(exePath);
+            _config = LoadConfig(@$"{_realExeDirectory}\appsettings.json");
             ConfigureLogger(_config.LogDirectory, _config.MinimumLogLevel, _config.Seq);
             _processor = new FileProcessor(_config);
         }
@@ -43,11 +46,19 @@ class Program
                 try
                 {
                     string[] files = Directory.GetFiles(_config.WatchDirectory, _config.FileSearchPattern);
+                    string[] commands;
+                    if (File.Exists(_config.CommandsFile))
+                        commands = File.ReadAllLines(_config.CommandsFile);
+                    else if (File.Exists(@$"{_realExeDirectory}\{Path.GetFileName(_config.CommandsFile)}"))
+                        commands = File.ReadAllLines(_config.CommandsFile);
+                    else
+                        throw new Exception($"commands file not found! Locations tried: '{_config.CommandsFile}', '{@$"{_realExeDirectory}\{Path.GetFileName(_config.CommandsFile)}"}'");
+                    
                     List<Task> tasks = new();
 
                     foreach (var file in files)
                     {
-                        tasks.Add(_processor.ProcessFile(file));
+                        tasks.Add(_processor.ProcessFile(file, commands));
                     }
 
                     await Task.WhenAll(tasks);
@@ -63,12 +74,9 @@ class Program
         }
     }
 
-    static Config LoadConfig()
+    static Config LoadConfig(string configPath)
     {
-        string? exePath = Process.GetCurrentProcess().MainModule?.FileName;
-        string realExeDirectory = Path.GetDirectoryName(exePath);
-        string customConfigPath = @$"{realExeDirectory}\appsettings.json";
-        string json = File.ReadAllText(customConfigPath);
+        string json = File.ReadAllText(configPath);
         return JsonSerializer.Deserialize<Config>(json) ?? throw new Exception("Failed to load configuration.");
     }
 

@@ -11,7 +11,7 @@ namespace PipelineRunner
             this.config = config;
         }
 
-        public async Task ProcessFile(string file)
+        public async Task ProcessFile(string file, string[] commands)
         {
             try
             {
@@ -19,7 +19,6 @@ namespace PipelineRunner
 
                 Dictionary<string, string?> outputs = new Dictionary<string, string?>();
                 string? lastOutput = $"\"{file}\""; // Start with input file
-                var commands = File.ReadAllLines(config.CommandsFile);
 
                 foreach (var command in commands)
                 {
