@@ -1,0 +1,4 @@
+programA.exe {input}
+programB.exe {output}
+programC.exe {output}
+programD.exe {programBoutput}
