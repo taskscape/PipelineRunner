@@ -1,43 +1,74 @@
-﻿using System.Text.Json;
+﻿using System.Diagnostics;
+using System.Text.Json;
 using PipelineRunner;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Serilog;
 
 class Program
 {
-    static async Task Main()
+    public static async Task Main()
     {
-        Config config = LoadConfig();
-        ConfigureLogger(config.LogDirectory, config.MinimumLogLevel, config.Seq);
+        var host = Host.CreateDefaultBuilder()
+            .UseWindowsService() // Enables Windows Service functionality
+            .ConfigureServices(services =>
+            {
+                services.AddHostedService<FileProcessingService>();
+            })
+            //.UseSerilog()
+            .Build();
 
-        Log.Information("File processing service started.");
+        await host.RunAsync();
+    }
 
-        while (true)
+    public class FileProcessingService : BackgroundService
+    {
+        private readonly Config _config;
+        private readonly FileProcessor _processor;
+
+        public FileProcessingService()
         {
-            try
+            _config = LoadConfig();
+            ConfigureLogger(_config.LogDirectory, _config.MinimumLogLevel, _config.Seq);
+            _processor = new FileProcessor(_config);
+        }
+
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            await Task.Yield(); //The reason for it is to "release" the Task so that Host.StartAsync can continue.
+            Log.Information("File processing service started.");
+
+            while (!stoppingToken.IsCancellationRequested)
             {
-                string[] files = Directory.GetFiles(config.WatchDirectory, config.FileSearchPattern);
-                FileProcessor processor = new(config);
-                List<Task> tasks = [];
-                foreach (var file in files)
+                try
                 {
-                    tasks.Add(processor.ProcessFile(file));
+                    string[] files = Directory.GetFiles(_config.WatchDirectory, _config.FileSearchPattern);
+                    List<Task> tasks = new();
+
+                    foreach (var file in files)
+                    {
+                        tasks.Add(_processor.ProcessFile(file));
+                    }
+
+                    await Task.WhenAll(tasks);
+
+                    Log.Information("Waiting {CycleTime} seconds before the next cycle.", _config.CycleTimeSeconds);
+                    await Task.Delay(_config.CycleTimeSeconds * 1000, stoppingToken);
                 }
-
-                await Task.WhenAll(tasks);
-
-                Log.Information("Waiting {CycleTime} seconds before the next cycle.", config.CycleTimeSeconds);
-                await Task.Delay(config.CycleTimeSeconds * 1000);
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "Error in the main application loop.");
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "Error in the service loop.");
+                }
             }
         }
     }
 
     static Config LoadConfig()
     {
-        string json = File.ReadAllText("appsettings.json");
+        string? exePath = Process.GetCurrentProcess().MainModule?.FileName;
+        string realExeDirectory = Path.GetDirectoryName(exePath);
+        string customConfigPath = @$"{realExeDirectory}\appsettings.json";
+        string json = File.ReadAllText(customConfigPath);
         return JsonSerializer.Deserialize<Config>(json) ?? throw new Exception("Failed to load configuration.");
     }
 
