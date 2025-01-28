@@ -50,7 +50,7 @@ class Program
                     if (File.Exists(_config.CommandsFile))
                         commands = File.ReadAllLines(_config.CommandsFile);
                     else if (File.Exists(@$"{_realExeDirectory}\{Path.GetFileName(_config.CommandsFile)}"))
-                        commands = File.ReadAllLines(_config.CommandsFile);
+                        commands = File.ReadAllLines(@$"{_realExeDirectory}\{Path.GetFileName(_config.CommandsFile)}");
                     else
                         throw new Exception($"commands file not found! Locations tried: '{_config.CommandsFile}', '{@$"{_realExeDirectory}\{Path.GetFileName(_config.CommandsFile)}"}'");
                     
