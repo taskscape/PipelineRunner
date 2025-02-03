@@ -15,6 +15,9 @@ namespace PipelineRunner
         {
             try
             {
+                bool hasWarnings = false;
+                bool hasErrors = false;
+
                 Log.Information("Processing file: {File}", file);
 
                 Dictionary<string, string?> outputs = new Dictionary<string, string?>();
@@ -38,9 +41,11 @@ namespace PipelineRunner
                         if (config.ContinueOnError)
                         {
                             Log.Warning("Command '{Command}' exited with non zero code!. Exit code: {exitCode}", processedCommand, exitCode);
+                            hasWarnings = true;
                             continue;
                         }
                         Log.Error("Command '{Command}' exited with non zero code!. Exit code: {exitCode}", processedCommand, exitCode);
+                        hasErrors = true;
                         break;
                     }
                     lastOutput = lastOutput.Trim();
@@ -67,10 +72,12 @@ namespace PipelineRunner
                         if (config.ContinueOnError)
                         {
                             Log.Warning("Command '{Command}' did not return a valid output.", processedCommand);
+                            hasWarnings = true;
                             StoreOutputFromCommand(outputs, command, lastOutput);
                             continue;
                         }
                         Log.Error("Command '{Command}' did not return a valid output.", processedCommand);
+                        hasErrors = true;
                         break;
                     }
 
@@ -80,7 +87,12 @@ namespace PipelineRunner
                     StoreOutputFromCommand(outputs, command, lastOutput);
                 }
 
-                Log.Information("Finished processing: {File}", file);
+                if(hasErrors)
+                    Log.Error("Finished processing (With erros, output file may not be created) file: {File}", file);
+                else if(hasWarnings)
+                    Log.Warning("Finished processing (With warnings, output file may not be created) file: {File}", file);
+                else
+                    Log.Information("Finished processing (Succesfully) file: {File}", file);
             }
             catch (Exception ex)
             {
