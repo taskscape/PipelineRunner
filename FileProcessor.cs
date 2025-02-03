@@ -36,6 +36,7 @@ namespace PipelineRunner
                     Log.Information(processedCommand);
 
                     int exitCode = RunProcessWithTimeout(processedCommand, out lastOutput);
+                    Log.Debug("Command '{Command}' output:\n{output}\n", processedCommand, lastOutput);
                     if (exitCode != 0)
                     {
                         if (config.ContinueOnError)
@@ -49,8 +50,6 @@ namespace PipelineRunner
                         break;
                     }
                     lastOutput = lastOutput.Trim();
-
-                    Log.Debug("Command '{Command}' output:\n{output}\n", processedCommand, lastOutput);
 
                     //Line Prefix filter
                     if(!string.IsNullOrEmpty(config.UseLineFilterPrefix))
@@ -127,7 +126,7 @@ namespace PipelineRunner
                     Arguments = arguments,
                     RedirectStandardOutput = true,
                     UseShellExecute = false,
-                    CreateNoWindow = true
+                    CreateNoWindow = true,
                 }
             };
 
