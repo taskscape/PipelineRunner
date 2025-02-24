@@ -68,7 +68,8 @@ class Program
                 }
                 catch (Exception ex)
                 {
-                    Log.Error(ex, "Error in the service loop.");
+                    Log.Error(ex, "Error in the service loop. Waiting {CycleTime} seconds before the next cycle.", 3600000);
+                    await Task.Delay(3600000, stoppingToken);
                 }
             }
         }
