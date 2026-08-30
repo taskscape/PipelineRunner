@@ -121,13 +121,13 @@ Common checks:
 
 ## Publish and deploy
 
-The recommended service package is the repository's `PipelineRunner-win-x64` publish profile. It creates a self-contained Windows x64 single-file executable, while keeping `appsettings.json` and `commands.txt` as editable files beside it:
+The recommended service package is the repository's `PipelineRunner-win-x64` publish profile. It creates a self-contained Windows x64 single-file executable and deliberately excludes `appsettings.json` and `commands.txt` so operational configuration and commands are not distributed in the package:
 
 ```powershell
 dotnet publish .\PipelineRunner.csproj -p:PublishProfile=PipelineRunner-win-x64
 ```
 
-The output folder is `bin\Release\net10.0\win-x64\publish`. Deploy its complete contents. The profile deliberately disables trimming and ReadyToRun: the small startup benefit does not justify the larger or less predictable deployment for a long-running Generic Host and Serilog service.
+The output folder is `bin\Release\net10.0\win-x64\publish`. Before starting the service, place the approved `appsettings.json` and `commands.txt` beside the deployed EXE; PipelineRunner will not start without them. The profile deliberately disables trimming and ReadyToRun: the small startup benefit does not justify the larger or less predictable deployment for a long-running Generic Host and Serilog service.
 
 To build a framework-dependent Windows deployment instead:
 
