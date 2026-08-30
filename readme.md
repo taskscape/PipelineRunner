@@ -110,7 +110,7 @@ For every matching file, PipelineRunner starts the first command with `{input}`,
 - If `Seq.ServerAddress` is configured, the same structured events are also sent to Seq.
 - Startup and host lifecycle events use the same Serilog configuration as file-processing events.
 - Every successful scan reports the watch directory, search pattern, and number of matching files. A zero-match cycle explicitly reports that no files will be processed; matched files are logged individually as processing begins.
-- A service-loop error is logged and the runner waits one hour before retrying the loop. Inspect the local log first if the service remains running but no files are processed.
+- A normal stop cancels the current wait and is logged as a service shutdown, not an error. A real service-loop error is logged and retried after one hour. Inspect the local log first if the service remains running but no files are processed.
 
 Common checks:
 

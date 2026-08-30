@@ -91,10 +91,16 @@ class Program
                     Log.Information("Waiting {CycleTime} seconds before the next cycle.", _config.CycleTimeSeconds);
                     await Task.Delay(_config.CycleTimeSeconds * 1000, stoppingToken);
                 }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    Log.Information("File processing service is stopping.");
+                    break;
+                }
                 catch (Exception ex)
                 {
-                    Log.Error(ex, "Error in the service loop. Waiting {CycleTime} seconds before the next cycle.", 3600000);
-                    await Task.Delay(3600000, stoppingToken);
+                    const int retryDelaySeconds = 60 * 60;
+                    Log.Error(ex, "Error in the service loop. Retrying in {RetryDelaySeconds} seconds.", retryDelaySeconds);
+                    await Task.Delay(TimeSpan.FromSeconds(retryDelaySeconds), stoppingToken);
                 }
             }
         }
