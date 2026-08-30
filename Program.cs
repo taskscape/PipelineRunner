@@ -61,6 +61,12 @@ class Program
                 try
                 {
                     string[] files = Directory.GetFiles(_config.WatchDirectory, _config.FileSearchPattern);
+                    Log.Information(
+                        "Found {FileCount} file(s) matching {FileSearchPattern} in {WatchDirectory}.",
+                        files.Length,
+                        _config.FileSearchPattern,
+                        _config.WatchDirectory);
+
                     string[] commands;
                     if (File.Exists(_config.CommandsFile))
                         commands = await File.ReadAllLinesAsync(_config.CommandsFile, stoppingToken);
@@ -69,6 +75,15 @@ class Program
                     else
                         throw new Exception($"commands file not found! Locations tried: '{_config.CommandsFile}', '{@$"{_realExeDirectory}\{Path.GetFileName(_config.CommandsFile)}"}'");
                     
+                    if (files.Length == 0)
+                    {
+                        Log.Information("No files found. No processing will be performed this cycle.");
+                    }
+                    else
+                    {
+                        Log.Information("Starting processing for {FileCount} file(s).", files.Length);
+                    }
+
                     List<Task> tasks = files.Select(file => _processor.ProcessFile(file, commands)).ToList();
 
                     await Task.WhenAll(tasks);

@@ -109,6 +109,7 @@ For every matching file, PipelineRunner starts the first command with `{input}`,
 - Local logs are always written as daily rolling `log-*.txt` files in `LogDirectory`; the latest 31 files are retained.
 - If `Seq.ServerAddress` is configured, the same structured events are also sent to Seq.
 - Startup and host lifecycle events use the same Serilog configuration as file-processing events.
+- Every successful scan reports the watch directory, search pattern, and number of matching files. A zero-match cycle explicitly reports that no files will be processed; matched files are logged individually as processing begins.
 - A service-loop error is logged and the runner waits one hour before retrying the loop. Inspect the local log first if the service remains running but no files are processed.
 
 Common checks:
@@ -120,7 +121,15 @@ Common checks:
 
 ## Publish and deploy
 
-Build a framework-dependent Windows deployment:
+The recommended service package is the repository's `PipelineRunner-win-x64` publish profile. It creates a self-contained Windows x64 single-file executable, while keeping `appsettings.json` and `commands.txt` as editable files beside it:
+
+```powershell
+dotnet publish .\PipelineRunner.csproj -p:PublishProfile=PipelineRunner-win-x64
+```
+
+The output folder is `bin\Release\net10.0\win-x64\publish`. Deploy its complete contents. The profile deliberately disables trimming and ReadyToRun: the small startup benefit does not justify the larger or less predictable deployment for a long-running Generic Host and Serilog service.
+
+To build a framework-dependent Windows deployment instead:
 
 ```powershell
 dotnet publish .\PipelineRunner.csproj --configuration Release --runtime win-x64 --self-contained false --output .\publish
