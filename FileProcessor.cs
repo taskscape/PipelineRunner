@@ -3,104 +3,111 @@ using Serilog;
 
 namespace PipelineRunner
 {
-    public class FileProcessor
+    public class FileProcessor(Config config)
     {
-        private readonly Config config;
-        public FileProcessor(Config config)
-        {
-            this.config = config;
-        }
-
-        public async Task ProcessFile(string file, string[] commands)
+        public Task ProcessFile(string file, string[] commands)
         {
             try
             {
-                bool hasWarnings = false;
-                bool hasErrors = false;
-
-                Log.Information("Processing file: {File}", file);
-
-                Dictionary<string, string?> outputs = new Dictionary<string, string?>();
-                string? lastOutput = $"\"{file}\""; // Start with input file
-
-                foreach (var command in commands)
+                try
                 {
-                    if (string.IsNullOrWhiteSpace(command)) continue;
-                    
-                    // Replace placeholders {input} and {output}
-                    string processedCommand = command.Replace("{input}", $"\"{file}\"").Replace("{output}", lastOutput);
-                    // Replace placeholders {programName}output
-                    foreach (var item in outputs)
-                        processedCommand = processedCommand.Replace($"{{{item.Key}}}", item.Value);
+                    bool hasWarnings = false;
+                    bool hasErrors = false;
 
-                    Log.Information(processedCommand);
+                    Log.Information("Processing file: {File}", file);
 
-                    int exitCode = RunProcessWithTimeout(processedCommand, out lastOutput);
-                    Log.Debug("Command '{Command}' output:\n{output}\n", processedCommand, lastOutput);
-                    if (exitCode != 0)
+                    Dictionary<string, string?> outputs = new Dictionary<string, string?>();
+                    string? lastOutput = $"\"{file}\""; // Start with input file
+
+                    foreach (string command in commands)
                     {
-                        if (config.ContinueOnError)
-                        {
-                            Log.Warning("Command '{Command}' exited with non zero code!. Exit code: {exitCode}", processedCommand, exitCode);
-                            hasWarnings = true;
-                            continue;
-                        }
-                        Log.Error("Command '{Command}' exited with non zero code!. Exit code: {exitCode}", processedCommand, exitCode);
-                        hasErrors = true;
-                        break;
-                    }
-                    lastOutput = lastOutput.Trim();
+                        if (string.IsNullOrWhiteSpace(command)) continue;
 
-                    //Line Prefix filter
-                    if(!string.IsNullOrEmpty(config.UseLineFilterPrefix))
-                    {
-                        string[] lines = lastOutput.Split([Environment.NewLine], StringSplitOptions.None);
-                        lastOutput = null;
-                        foreach (string line in lines)
+                        // Replace placeholders {input} and {output}
+                        string processedCommand =
+                            command.Replace("{input}", $"\"{file}\"").Replace("{output}", lastOutput);
+                        // Replace placeholders {programName}output
+                        foreach (KeyValuePair<string, string?> item in outputs)
+                            processedCommand = processedCommand.Replace($"{{{item.Key}}}", item.Value);
+
+                        Log.Information(processedCommand);
+
+                        int exitCode = RunProcessWithTimeout(processedCommand, out lastOutput);
+                        Log.Debug("Command '{Command}' output:\n{output}\n", processedCommand, lastOutput);
+                        if (exitCode != 0)
                         {
-                            if (line.StartsWith(config.UseLineFilterPrefix))
+                            if (config.ContinueOnError)
                             {
-                                lastOutput = line.Substring(config.UseLineFilterPrefix.Length).TrimEnd();
-                                break;
+                                Log.Warning("Command '{Command}' exited with non zero code!. Exit code: {exitCode}",
+                                    processedCommand, exitCode);
+                                hasWarnings = true;
+                                continue;
                             }
-                        }
-                    }
 
-                    if (string.IsNullOrWhiteSpace(lastOutput))
-                    {
-                        if (config.ContinueOnError)
+                            Log.Error("Command '{Command}' exited with non zero code!. Exit code: {exitCode}",
+                                processedCommand, exitCode);
+                            hasErrors = true;
+                            break;
+                        }
+
+                        lastOutput = lastOutput.Trim();
+
+                        //Line Prefix filter
+                        if (!string.IsNullOrEmpty(config.UseLineFilterPrefix))
                         {
-                            Log.Warning("Command '{Command}' did not return a valid output.", processedCommand);
-                            hasWarnings = true;
-                            StoreOutputFromCommand(outputs, command, lastOutput);
-                            continue;
+                            string[] lines = lastOutput.Split([Environment.NewLine], StringSplitOptions.None);
+                            lastOutput =
+                                (from line in lines
+                                    where line.StartsWith(config.UseLineFilterPrefix)
+                                    select line.Substring(config.UseLineFilterPrefix.Length).TrimEnd())
+                                .FirstOrDefault();
                         }
-                        Log.Error("Command '{Command}' did not return a valid output.", processedCommand);
-                        hasErrors = true;
-                        break;
+
+                        if (string.IsNullOrWhiteSpace(lastOutput))
+                        {
+                            if (config.ContinueOnError)
+                            {
+                                Log.Warning("Command '{Command}' did not return a valid output.", processedCommand);
+                                hasWarnings = true;
+                                StoreOutputFromCommand(outputs, command, lastOutput);
+                                continue;
+                            }
+
+                            Log.Error("Command '{Command}' did not return a valid output.", processedCommand);
+                            hasErrors = true;
+                            break;
+                        }
+
+                        if (!lastOutput.Contains('"'))
+                            lastOutput = $"\"{lastOutput}\"";
+
+                        StoreOutputFromCommand(outputs, command, lastOutput);
                     }
 
-                    if (!lastOutput.Contains('"'))
-                        lastOutput = $"\"{lastOutput}\"";
-
-                    StoreOutputFromCommand(outputs, command, lastOutput);
+                    if (hasErrors)
+                        Log.Error("Finished processing (With erros, output file may not be created) file: {File}",
+                            file);
+                    else if (hasWarnings)
+                        Log.Warning("Finished processing (With warnings, output file may not be created) file: {File}",
+                            file);
+                    else
+                        Log.Information("Finished processing (Succesfully) file: {File}", file);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "Error processing file: {File}", file);
                 }
 
-                if(hasErrors)
-                    Log.Error("Finished processing (With erros, output file may not be created) file: {File}", file);
-                else if(hasWarnings)
-                    Log.Warning("Finished processing (With warnings, output file may not be created) file: {File}", file);
-                else
-                    Log.Information("Finished processing (Succesfully) file: {File}", file);
+                return Task.CompletedTask;
             }
-            catch (Exception ex)
+            catch (Exception exception)
             {
-                Log.Error(ex, "Error processing file: {File}", file);
+                return Task.FromException(exception);
             }
         }
 
         //Store the output as {programName}output variable in dictionary
-        public static void StoreOutputFromCommand(Dictionary<string, string?> dict, string command, string? output)
+        private static void StoreOutputFromCommand(Dictionary<string, string?> dict, string command, string? output)
         {
             string outputsKeyName = Path.GetFileNameWithoutExtension(command.Split(' ', 2)[0].Trim()) + "output";
             if (!dict.ContainsKey(outputsKeyName))
@@ -109,7 +116,7 @@ namespace PipelineRunner
                 dict[outputsKeyName] = output;
         }
 
-        int RunProcessWithTimeout(string commandLine, out string output)
+        private int RunProcessWithTimeout(string commandLine, out string output)
         {
             output = string.Empty;
             string[] parts = commandLine.Split(' ', 2);
@@ -118,7 +125,7 @@ namespace PipelineRunner
             string program = parts[0];
             string arguments = parts.Length > 1 ? parts[1] : "";
 
-            using var process = new Process
+            using Process process = new Process
             {
                 StartInfo = new ProcessStartInfo
                 {
@@ -138,6 +145,7 @@ namespace PipelineRunner
                     process.Kill();
                     return process.ExitCode;
                 }
+
                 output = process.StandardOutput.ReadToEnd();
                 return process.ExitCode;
             }

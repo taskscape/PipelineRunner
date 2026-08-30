@@ -8,9 +8,9 @@
         public int CycleTimeSeconds { get; set; }
         public string LogDirectory { get; set; } = "/logs";
         public string? UseLineFilterPrefix { get; set; }
-        public int ProcessTimeoutSeconds { get; set; }
+        public int ProcessTimeoutSeconds { get; set; } = 15 * 60;
         public string? MinimumLogLevel { get; set; }
-        public bool ContinueOnError { get; set; } = false;
+        public bool ContinueOnError { get; set; } = true;
         public Seq? Seq { get; set; }
     }
 
@@ -18,5 +18,6 @@
     {
         public string? ServerAddress { get; set; }
         public string? AppName { get; set; }
+        public string? ApiKey { get; set; }
     }
 }

@@ -1,75 +1,181 @@
-# **PipelineRunner**
+# PipelineRunner
 
-## **Overview**
-This application automates file processing by scanning a specified directory for files matching a pattern and executing a sequence of external programs on each file. The execution sequence is defined in a separate `commands.txt` file. The application runs in cycles, logging all activity and handling timeouts.
+PipelineRunner is a Windows worker that repeatedly finds files matching a pattern and runs an ordered command pipeline for each file. It is suitable for unattended conversion, enrichment, compression, upload, or similar file-processing workflows.
 
-## **Configuration (appsettings.json)**
-All configuration settings are stored in `appsettings.json`.
+It can run interactively for validation or as a Windows service for continuous operation. Each run writes structured events to local rolling log files and, when configured, to Seq.
 
-### **General Settings**
-| Parameter                 | Type    | Description |
-|---------------------------|---------|-------------|
-| `WatchDirectory`          | string  | **(required)** Path to the directory to be monitored for new files. |
-| `FileSearchPattern`       | string  | **(required)** Search pattern for files (e.g., `"*.pdf"`). |
-| `CommandsFile`            | string  | **(required)** Path to the file containing the list of commands to execute. |
-| `CycleTimeSeconds`        | int     | **(required)** Delay (in seconds) between each cycle of file processing. |
-| `ProcessTimeoutSeconds`   | int     | **(required)** Maximum time allowed for each external process to complete |
-| `ContinueOnError`         | boolean | (Optional) If `true`, the application continues running the next program even if an error occurs. Default: `false`. |
+## Before you begin
 
-### **Logging Configuration**
-| Parameter           | Type    | Description |
-|---------------------|---------|-------------|
-| `LogDirectory`      | string  | (Optional) Directory where logs will be saved. Default: `logs`. The folder is created if it doesn't exist. |
-| `MinimumLogLevel`   | string  | (Optional) Minimum log level (supported values:`verbose`, `debug`, `information`, `warning`, `error`) Default: `information`. |
+- For a framework-dependent deployment, install the .NET 10 runtime on the target computer. A self-contained publish does not need a separately installed runtime.
+- Put PipelineRunner, `appsettings.json`, and `commands.txt` in the same deployment folder. The application reads `appsettings.json` from its executable directory.
+- Ensure the account that runs PipelineRunner can read the watch directory and command tools, write the log directory, and access any output locations. It also needs network access to Seq when Seq logging is enabled.
+- Commands are re-run for every matching file on every cycle. A successful pipeline should therefore move, rename, delete, or otherwise make its input no longer match the configured search pattern.
 
-### **Output Handling**
-| Parameter              | Type    | Description |
-|------------------------|---------|-------------|
-| `UseLineFilterPrefix`  | string  | (Optional) If set, the program searches for a line with the specified prefix in the command output and uses it as input for the next command (without the prefix). Useful when handling debug outputs. |
+## Quick start
 
-## **Commands File (commands.txt)**
-The `commands.txt` file defines the list of programs to execute for each file. Each command should be on a new line.
+1. Build the application from the repository root:
 
-### **Syntax:**
+   ```powershell
+   dotnet build .\PipelineRunner.sln --configuration Release
+   ```
+
+2. Edit `appsettings.json` and `commands.txt` as described below.
+
+3. Test it interactively before installing it as a service:
+
+   ```powershell
+   dotnet run --project .\PipelineRunner.csproj --configuration Release
+   ```
+
+   Use `Ctrl+C` to stop the interactive run. Check the log folder for startup, processing, and error events.
+
+## Configuration
+
+All settings are stored in `appsettings.json`. Paths may be absolute. `LogDirectory` may also be relative; a relative log path is resolved from the executable directory, which makes it safe to use when running as a Windows service.
+
+```json
+{
+  "WatchDirectory": "D:\\Incoming",
+  "FileSearchPattern": "*.pdf",
+  "CommandsFile": "commands.txt",
+  "UseLineFilterPrefix": "RET-OUTPUT: ",
+  "CycleTimeSeconds": 300,
+  "LogDirectory": "logs",
+  "ProcessTimeoutSeconds": 300,
+  "MinimumLogLevel": "information",
+  "ContinueOnError": true,
+  "Seq": {
+    "ServerAddress": "https://seq.example.internal",
+    "AppName": "PipelineRunner",
+    "ApiKey": null
+  }
+}
 ```
-<program> {input}
-<program> {output}
-```
-- `{input}` refers to the original file being processed.
-- `{output}` refers to the output from the previous command.
-- If `UseLineFilterPrefix` is set, the application will use the prefixed line as `{output}` (without the prefix itself).
 
-- *Alternatively, `{<program>output}` can be used to reference the latest output from a specified program. For example, when using `pdfToImage.exe`, the corresponding output can be accessed with `{pdfToImageoutput}`. **Note:** This reference is case-sensitive.*
+| Setting | Required | Description |
+|---|---:|---|
+| `WatchDirectory` | Yes | Directory scanned at the start of each cycle. |
+| `FileSearchPattern` | Yes | `Directory.GetFiles` search pattern, for example `*.pdf`. |
+| `CommandsFile` | Yes | Command-pipeline file. An absolute path is used directly; otherwise the runner also looks for its file name next to the executable. |
+| `CycleTimeSeconds` | Yes | Delay after a completed scan before the next scan. Use a positive value. |
+| `ProcessTimeoutSeconds` | No | Maximum duration of each external command before PipelineRunner terminates it. Defaults to 900 seconds (15 minutes); use a positive value. |
+| `ContinueOnError` | No | `false` stops the current file's pipeline after a failing command or empty result. `true` records a warning and continues with later commands. Defaults to `true`. |
+| `UseLineFilterPrefix` | No | If specified, only the first command-output line beginning with this exact prefix becomes the next `{output}` value; the prefix is removed. |
+| `LogDirectory` | No | Local log folder. Defaults to `logs`; relative values are relative to the executable directory. |
+| `MinimumLogLevel` | No | One of `verbose`, `debug`, `information`, `warning`, or `error`. Defaults to `information`. |
+| `Seq.ServerAddress` | No | Seq ingestion endpoint. Omit or leave empty to disable Seq while retaining local file logging. |
+| `Seq.AppName` | No | Value written as the `Application` property on log events. |
+| `Seq.ApiKey` | No | Seq ingestion API key. It is passed to the Seq sink and is never written to PipelineRunner logs. |
 
-### **Example `commands.txt`**
+### Seq API keys
+
+To enable authenticated Seq ingestion, set both `Seq.ServerAddress` and `Seq.ApiKey`:
+
+```json
+"Seq": {
+  "ServerAddress": "https://seq.example.internal",
+  "AppName": "PipelineRunner",
+  "ApiKey": "replace-with-a-Seq-ingestion-key"
+}
 ```
+
+The API key is stored in plain text in this configuration format. Do not commit a production configuration containing a real key. Restrict the deployment folder and `appsettings.json` with NTFS permissions to the service account and administrators, and restart the service after changing the key or Seq address.
+
+## Command pipelines
+
+`commands.txt` contains one command per line. Empty lines are ignored. A command's first space-separated token is the executable; the rest of the line is passed as its arguments. Consequently, executable paths containing spaces are not currently supported; install or invoke tools through a path without spaces.
+
+Available placeholders are:
+
+| Placeholder | Meaning |
+|---|---|
+| `{input}` | The original matching file, quoted. |
+| `{output}` | The previous command's processed standard output. |
+| `{programNameoutput}` | The most recent output from a named command. `programName` is the command executable's file name without its extension and is case-sensitive. |
+
+Example:
+
+```text
 pdfToImage.exe {input}
 imageCompressor.exe {output}
 cloudUploader.exe {output}
-imageCompressorFileLog {imageCompressoroutput}
+imageCompressorFileLog.exe {imageCompressoroutput}
 ```
-This will:
-1. Convert a PDF to an image.
-2. Compress the image.
-3. Upload the compressed image to the cloud.
-4. Log the compressed image.
 
-## **How It Works**
-1. The application scans `WatchDirectory` for files matching `FileSearchPattern`.
-2. It reads the list of commands from `commands.txt`.
-3. For each file:
-   - Executes the first command, replacing `{input}` with the file name.
-   - Captures the output (optionally filtering with `UseLineFilterPrefix`).
-   - Passes the output to the next command as `{output}`.
-   - If `ContinueOnError` is `false`, execution stops on the first failure.
-4. Logs all activity.
-5. Waits for `CycleTimeSeconds` before starting the next cycle.
+For every matching file, PipelineRunner starts the first command with `{input}`, captures its standard output, and passes that output to the next command. It processes matching files concurrently, so command tools and output paths must tolerate concurrent execution. A command that returns a non-zero exit code, times out, or produces no usable output is logged.
 
-## **Logging**
-- Logs are stored in `LogDirectory`.
-- Includes process execution details, errors, and timeouts.
+## Logging and troubleshooting
 
-## **Error Handling**
-- If a process times out, it is terminated and logged.
-- If `ContinueOnError` is `true`, the next command continues executing.
-- If `ContinueOnError` is `false`, execution stops on failure.
+- Local logs are always written as daily rolling `log-*.txt` files in `LogDirectory`; the latest 31 files are retained.
+- If `Seq.ServerAddress` is configured, the same structured events are also sent to Seq.
+- Startup and host lifecycle events use the same Serilog configuration as file-processing events.
+- A service-loop error is logged and the runner waits one hour before retrying the loop. Inspect the local log first if the service remains running but no files are processed.
+
+Common checks:
+
+1. Confirm `WatchDirectory` exists and that the service account can read it.
+2. Confirm the command executable and all input/output paths are reachable by the service account, not only by your interactive user.
+3. Check the most recent `log-*.txt` file for the command, exit code, exception, or timeout.
+4. If Seq is configured, verify its URL, firewall/proxy access, and ingestion API key. Local file logging continues independently of successful Seq delivery.
+
+## Publish and deploy
+
+Build a framework-dependent Windows deployment:
+
+```powershell
+dotnet publish .\PipelineRunner.csproj --configuration Release --runtime win-x64 --self-contained false --output .\publish
+```
+
+Copy the complete contents of `publish` to a permanent deployment directory, for example `C:\Program Files\PipelineRunner`. Make sure that directory contains `PipelineRunner.exe`, `appsettings.json`, and `commands.txt`. Edit the copied configuration before starting the service.
+
+For a target that cannot have the .NET runtime installed, publish self-contained instead:
+
+```powershell
+dotnet publish .\PipelineRunner.csproj --configuration Release --runtime win-x64 --self-contained true --output .\publish
+```
+
+## Install as a Windows service
+
+Run the following in an **elevated PowerShell** after deploying to `C:\Program Files\PipelineRunner`. Choose a service name that is unique on the machine.
+
+```powershell
+New-Service -Name "PipelineRunner" -BinaryPathName '"C:\Program Files\PipelineRunner\PipelineRunner.exe"' -DisplayName "Pipeline Runner" -Description "Runs configured file-processing command pipelines." -StartupType Automatic
+sc.exe failure "PipelineRunner" reset= 86400 actions= restart/60000/restart/60000/restart/60000
+Start-Service -Name "PipelineRunner"
+Get-Service -Name "PipelineRunner"
+```
+
+Expected result: `Get-Service` reports `Running`, a local log file appears under the configured `LogDirectory`, and events appear in Seq if it is configured and reachable.
+
+The service initially runs as `LocalSystem`. If the watch folder, command tools, network shares, or Seq access require a specific identity, open **Services** (`services.msc`), open **Pipeline Runner** properties, select **Log On**, set the approved service account, then restart the service. Grant that account only the required read, write, and network permissions.
+
+### Update a deployed service
+
+1. Stop the service: `Stop-Service -Name "PipelineRunner"`.
+2. Replace the deployed files, preserving or deliberately updating `appsettings.json` and `commands.txt`.
+3. Start the service: `Start-Service -Name "PipelineRunner"`.
+4. Confirm the service status and check the newest local log file.
+
+## Uninstall the Windows service
+
+Run these commands in an **elevated PowerShell**:
+
+```powershell
+Stop-Service -Name "PipelineRunner" -ErrorAction SilentlyContinue
+sc.exe delete "PipelineRunner"
+```
+
+`sc.exe delete` removes the service registration; Windows may keep it marked for deletion until all Services consoles and handles are closed. Verify that it is gone with:
+
+```powershell
+Get-Service -Name "PipelineRunner"
+```
+
+After the service is deleted, retain or archive `appsettings.json` and the local log files if they are needed for audit or troubleshooting. Then remove the deployment directory manually when it is no longer required. Deleting the service does not delete files, configuration, or logs.
+
+## Security and operating guidance
+
+- Treat `commands.txt` as executable operational configuration. Limit write permission to trusted administrators.
+- Apply the same least-privilege permissions to the watch folder, command tools, output locations, log folder, and `appsettings.json`.
+- Do not put production Seq API keys in source control or command-line arguments.
+- Test changed pipelines interactively with representative non-production files before restarting the production service.

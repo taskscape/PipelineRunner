@@ -4,21 +4,38 @@ using PipelineRunner;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
+using Serilog.Events;
 
 class Program
 {
     public static async Task Main()
     {
-        var host = Host.CreateDefaultBuilder()
-            .UseWindowsService() // Enables Windows Service functionality
-            .ConfigureServices(services =>
-            {
-                services.AddHostedService<FileProcessingService>();
-            })
-            //.UseSerilog()
-            .Build();
+        try
+        {
+            Config config = LoadConfig(Path.Combine(AppContext.BaseDirectory, "appsettings.json"));
+            ConfigureLogger(config.LogDirectory, config.MinimumLogLevel, config.Seq);
 
-        await host.RunAsync();
+            using IHost host = Host.CreateDefaultBuilder()
+                .UseWindowsService() // Enables Windows Service functionality
+                .UseSerilog()
+                .ConfigureServices(services =>
+                {
+                    services.AddSingleton(config);
+                    services.AddHostedService<FileProcessingService>();
+                })
+                .Build();
+
+            await host.RunAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.Fatal(ex, "Pipeline runner terminated unexpectedly.");
+            Environment.ExitCode = 1;
+        }
+        finally
+        {
+            await Log.CloseAndFlushAsync();
+        }
     }
 
     public class FileProcessingService : BackgroundService
@@ -27,12 +44,10 @@ class Program
         private readonly FileProcessor _processor;
         private readonly string? _realExeDirectory;
 
-        public FileProcessingService()
+        public FileProcessingService(Config config)
         {
-            string? exePath = Process.GetCurrentProcess().MainModule?.FileName;
-            _realExeDirectory = Path.GetDirectoryName(exePath);
-            _config = LoadConfig(@$"{_realExeDirectory}\appsettings.json");
-            ConfigureLogger(_config.LogDirectory, _config.MinimumLogLevel, _config.Seq);
+            _realExeDirectory = AppContext.BaseDirectory;
+            _config = config;
             _processor = new FileProcessor(_config);
         }
 
@@ -48,18 +63,13 @@ class Program
                     string[] files = Directory.GetFiles(_config.WatchDirectory, _config.FileSearchPattern);
                     string[] commands;
                     if (File.Exists(_config.CommandsFile))
-                        commands = File.ReadAllLines(_config.CommandsFile);
+                        commands = await File.ReadAllLinesAsync(_config.CommandsFile, stoppingToken);
                     else if (File.Exists(@$"{_realExeDirectory}\{Path.GetFileName(_config.CommandsFile)}"))
-                        commands = File.ReadAllLines(@$"{_realExeDirectory}\{Path.GetFileName(_config.CommandsFile)}");
+                        commands = await File.ReadAllLinesAsync(@$"{_realExeDirectory}\{Path.GetFileName(_config.CommandsFile)}", stoppingToken);
                     else
                         throw new Exception($"commands file not found! Locations tried: '{_config.CommandsFile}', '{@$"{_realExeDirectory}\{Path.GetFileName(_config.CommandsFile)}"}'");
                     
-                    List<Task> tasks = new();
-
-                    foreach (var file in files)
-                    {
-                        tasks.Add(_processor.ProcessFile(file, commands));
-                    }
+                    List<Task> tasks = files.Select(file => _processor.ProcessFile(file, commands)).ToList();
 
                     await Task.WhenAll(tasks);
 
@@ -75,19 +85,23 @@ class Program
         }
     }
 
-    static Config LoadConfig(string configPath)
+    private static Config LoadConfig(string configPath)
     {
         string json = File.ReadAllText(configPath);
         return JsonSerializer.Deserialize<Config>(json) ?? throw new Exception("Failed to load configuration.");
     }
 
-    static void ConfigureLogger(string logDirectory, string? MinimumLevel = null, Seq? seq = null)
+    private static void ConfigureLogger(string logDirectory, string? minimumLevel = null, Seq? seq = null)
     {
-        Directory.CreateDirectory(logDirectory);
+        string localLogDirectory = Path.IsPathRooted(logDirectory)
+            ? logDirectory
+            : Path.Combine(AppContext.BaseDirectory, logDirectory);
+        Directory.CreateDirectory(localLogDirectory);
 
-        var loggerConfig = new LoggerConfiguration();
+        LoggerConfiguration loggerConfig = new LoggerConfiguration()
+            .Enrich.FromLogContext();
 
-        switch (MinimumLevel?.ToLower())
+        switch (minimumLevel?.ToLower())
         {
             case "verbose":
                 loggerConfig.MinimumLevel.Verbose();
@@ -112,9 +126,17 @@ class Program
         if (!string.IsNullOrEmpty(seq?.AppName))
             loggerConfig.Enrich.WithProperty("Application", seq.AppName);
         loggerConfig.WriteTo.Console();
-        loggerConfig.WriteTo.File(Path.Combine(logDirectory, "log-.txt"), rollingInterval: RollingInterval.Day);
-        if(!string.IsNullOrEmpty(seq?.ServerAddress))
-            loggerConfig.WriteTo.Seq(seq.ServerAddress);
+        loggerConfig.WriteTo.File(
+            Path.Combine(localLogDirectory, "log-.txt"),
+            rollingInterval: RollingInterval.Day,
+            retainedFileCountLimit: 31);
+
+        if (!string.IsNullOrWhiteSpace(seq?.ServerAddress))
+        {
+            string? apiKey = string.IsNullOrWhiteSpace(seq.ApiKey) ? null : seq.ApiKey;
+            loggerConfig.WriteTo.Seq(seq.ServerAddress, apiKey: apiKey);
+        }
+
         Log.Logger = loggerConfig.CreateLogger();
     }
 }
